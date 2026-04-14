@@ -37,15 +37,16 @@ PAGE_MAP <- list(
   results_overview      = c(30, 38, 39, 40, 43),
   portfolio_overview    = 253,             # Note 7 summary table
   csm_maturity          = 254,             # CSM maturity buckets
-  nonlife_movements     = c(257, 258),     # Note 7.1 Non-Life movements
-  health_movements      = c(262, 263),     # Note 7.2 Health movements
-  life_movements        = c(268, 269, 270),# Note 7.3 Life movements
-  csm_rollforward       = c(259, 260, 269, 270),
-  loss_component        = c(258, 263, 267, 265),
+  nonlife_movements     = c(257, 259),     # Note 7.1: p257=total NL 2025, p259=GMM NL 2025 (p258 is 2024)
+  health_movements      = c(263),          # Note 7.2: p263=total Health 2025 (p262=header, p265=2024)
+  life_movements        = c(267, 269, 270),# Note 7.3: p267=total Life 2025, p269-270=GMM/VFA Life 2025
+  csm_rollforward       = c(259, 269, 270),# GMM CSM cols: p259=NL GMM 2025, p269-270=Life GMM/VFA 2025
+                                           # No standalone Health GMM table (Health GMM=€34M, PAA-dominated)
+  loss_component        = c(257, 259, 263, 267, 269), # All 2025 movement tables in ascending order
   insurance_svc_result  = c(296, 297),     # Note 10
   net_financial_result  = c(298, 299),     # Note 11
   investment_result     = 300,             # Note 12
-  discount_rates        = c(273, 274, 275),
+  discount_rates        = c(275, 276, 277),# p275=UFR text, p276=yield curve min-max table, p277=confidence levels
   solvency              = c(34, 35),
   investments_note      = c(248, 249, 250, 251, 252),
   gross_premium         = c(30, 33, 39),
@@ -186,18 +187,42 @@ s2c <- call_claude(paste0(
 ), "section_2c_other_income")
 
 # 2d: Discount rates
+# Pages: p275 = UFR/methodology text, p276 = yield curve min-max table, p277 = confidence levels
+# The table on p276 shows min-max RANGES per tenor (e.g. "2,17-2,41") using Dutch comma decimals.
+# Three curves are presented:
+#   "PAA Euro"                    = short-term PAA curve (maturities up to 20y only)
+#   "GMM Euro"                    = standard GMM/liquid curve (up to 50y)
+#   "Life Netherlands GMM and VFA"= illiquid curve with illiquidity premium (up to 50y)
+# We map: GMM Euro -> liquid_*, Life Netherlands GMM & VFA -> illiquid_*
+# Extract the MIDPOINT of each min-max range as a single decimal.
 s2d_text <- extract_pages(pages_text, PAGE_MAP$discount_rates)
 s2d <- call_claude(paste0(
-  "From this Achmea 2025 annual report extract, extract the discount rate curves at 31 December 2025 ",
-  "for both liquid and illiquid yield curves (as annual rates, expressed as decimals e.g. 2.5% = 0.025). ",
-  "Also extract cost of capital rate and confidence levels for RA if present.\n\n",
-  "Return JSON:\n",
-  '{"liquid_1y": <number>, "liquid_5y": <number>, "liquid_10y": <number>,',
-  ' "liquid_15y": <number>, "liquid_20y": <number>, "liquid_30y": <number>, "liquid_50y": <number>,',
-  ' "illiquid_1y": <number>, "illiquid_5y": <number>, "illiquid_10y": <number>,',
-  ' "illiquid_15y": <number>, "illiquid_20y": <number>, "illiquid_30y": <number>, "illiquid_50y": <number>,',
-  ' "last_liquid_point": <integer years>, "ltfr": <long term forward rate as decimal>,',
-  ' "cost_of_capital_rate": <decimal>, "confidence_life": <decimal>, "confidence_nonlife": <decimal>, "confidence_health": <decimal>}\n\n',
+  "From this Achmea 2025 annual report extract (pages covering discount curve assumptions), ",
+  "extract spot rates at 31 December 2025 for the EUR yield curves.\n\n",
+  "IMPORTANT FORMATTING RULES:\n",
+  "- Numbers use DUTCH comma decimals: '2,17' means 2.17 — convert all commas to dots.\n",
+  "- The yield curve table gives MIN-MAX RANGES per tenor (e.g. '2,17-2,41'). ",
+  "Return the MIDPOINT of each range as a decimal (e.g. midpoint of 2.17-2.41 = 0.0229).\n",
+  "- Rates are percentages — convert to decimals (e.g. 2.29%% = 0.0229).\n",
+  "- Three EUR curves appear: 'PAA Euro', 'GMM Euro', 'Life Netherlands GMM and VFA'.\n",
+  "  Map 'GMM Euro' to the liquid_* keys and 'Life Netherlands GMM and VFA' to illiquid_* keys.\n",
+  "- PAA Euro only goes to 20 years — return null for liquid_30y and liquid_50y from PAA.\n",
+  "- The UFR (Ultimate Forward Rate) is stated as a percentage in the text on the first page ",
+  "of the extract — convert to decimal.\n",
+  "- Cost of capital rate is stated as a percentage in the Risk Adjustment section.\n",
+  "- Confidence levels are in a separate table: look for Non-Life Netherlands, Life Netherlands, Health.\n\n",
+  "Return JSON with exactly these keys:\n",
+  '{"liquid_1y": <GMM Euro 1y midpoint as decimal>,',
+  ' "liquid_5y": <GMM Euro 5y midpoint>, "liquid_10y": <GMM Euro 10y midpoint>,',
+  ' "liquid_15y": <GMM Euro 15y midpoint>, "liquid_20y": <GMM Euro 20y midpoint>,',
+  ' "liquid_30y": <GMM Euro 30y midpoint>, "liquid_50y": <GMM Euro 50y midpoint>,',
+  ' "illiquid_1y": <Life/VFA Euro 1y midpoint>, "illiquid_5y": <Life/VFA Euro 5y midpoint>,',
+  ' "illiquid_10y": <Life/VFA Euro 10y midpoint>, "illiquid_15y": <Life/VFA Euro 15y midpoint>,',
+  ' "illiquid_20y": <Life/VFA Euro 20y midpoint>, "illiquid_30y": <Life/VFA Euro 30y midpoint>,',
+  ' "illiquid_50y": <Life/VFA Euro 50y midpoint>,',
+  ' "ufr": <Ultimate Forward Rate as decimal e.g. 2.3%% = 0.023>,',
+  ' "cost_of_capital_rate": <decimal>, "confidence_nonlife_nl": <decimal e.g. 72.1%% = 0.721>,',
+  ' "confidence_life_nl": <decimal>, "confidence_health_nl": <decimal or null if not shown>}\n\n',
   "Text:\n", s2d_text
 ), "section_2d_discount_rates")
 
@@ -207,29 +232,59 @@ s2d <- call_claude(paste0(
 
 message("\n[3/7] CSM, RA and loss component rollforwards...")
 
-# 3a: CSM rollforward (Life + Non-Life + Health combined, then split)
+# 3a: CSM rollforward — extracted from GMM movement tables (Non-Life p259, Life p269-270)
+# STRUCTURE: The CSM is NOT a standalone rollforward. It appears as two columns
+# ("Contracts under fair value approach" and "Other contracts") within the
+# "Movements in insurance contracts valued at GMM" tables. The Total CSM column
+# is the sum of these two columns.
+# Key row mappings:
+#   Opening CSM     = "Balance at 1 January" row, Total CSM column
+#   New business    = "Contracts initially recognised" row, CSM column (under future service changes)
+#   Future changes  = "Changes in estimates that adjust the CSM" row, CSM column
+#   Finance result  = "Financial income and expenses" row, CSM column
+#   CSM release     = "CSM recognised for services provided" row (under current service changes) — will be negative
+#   Other/FX        = remaining difference to closing balance
+#   Closing CSM     = "Balance at 31 December" row, Total CSM column
+# NOTE: There is no standalone Health GMM table (Health is PAA-dominated, GMM only €34M).
+#       Omit health CSM split keys — they cannot be derived from these pages.
 s3a_text <- extract_pages(pages_text, PAGE_MAP$csm_rollforward)
 s3a <- call_claude(paste0(
-  "From this Achmea 2025 annual report extract, find the Contractual Service Margin (CSM) ",
-  "rollforward tables for 2025 (opening -> closing). Extract total and per-segment values (EUR millions).\n\n",
+  "From this Achmea 2025 annual report extract, find the CSM (Contractual Service Margin) data ",
+  "embedded in the 'Movements in insurance contracts valued at GMM' tables for 2025.\n\n",
+  "STRUCTURE: The CSM appears as a set of columns (labelled something like ",
+  "'Contracts under fair value approach', 'Other contracts', 'Total CSM') in each GMM table. ",
+  "There are two separate tables: one for Non-Life and one for Life (GMM and VFA). ",
+  "Extract values from the TOTAL CSM column (or sum the sub-columns) for each row. ",
+  "All values in EUR millions.\n\n",
+  "Row label mappings to use:\n",
+  "  opening = 'Balance at 1 January' Total CSM\n",
+  "  csm_release = 'CSM recognised for services provided' row (negative — reduces CSM)\n",
+  "  csm_new_business = 'Contracts initially recognised' row in CSM column\n",
+  "  csm_future_service_changes = 'Changes in estimates that adjust the CSM' row\n",
+  "  csm_finance_result = 'Financial income and expenses' row in CSM column\n",
+  "  csm_other = any remaining line items not covered above\n",
+  "  closing = 'Balance at 31 December' Total CSM\n\n",
   "Return JSON:\n",
-  '{"csm_opening_total": <number>, "csm_new_business": <number>, "csm_acquisitions": <number>,',
-  ' "csm_finance_result": <number>, "csm_future_service_changes": <number>,',
-  ' "csm_release": <number>, "csm_fx": <number>, "csm_other": <number>, "csm_closing_total": <number>,',
-  ' "csm_opening_nonlife": <number>, "csm_closing_nonlife": <number>,',
+  '{"csm_opening_nonlife": <number>, "csm_closing_nonlife": <number>,',
+  ' "csm_new_business_nonlife": <number>, "csm_finance_nonlife": <number>,',
+  ' "csm_future_changes_nonlife": <number>, "csm_release_nonlife": <number>,',
+  ' "csm_other_nonlife": <number>,',
   ' "csm_opening_life": <number>, "csm_closing_life": <number>,',
-  ' "csm_opening_health": <number>, "csm_closing_health": <number>,',
-  ' "csm_new_business_nonlife": <number>, "csm_new_business_life": <number>,',
-  ' "csm_finance_nonlife": <number>, "csm_finance_life": <number>,',
-  ' "csm_future_changes_nonlife": <number>, "csm_future_changes_life": <number>,',
-  ' "csm_release_nonlife": <number>, "csm_release_life": <number>, "csm_release_health": <number>,',
-  ' "csm_other_nonlife": <number>, "csm_other_life": <number>,',
-  ' "csm_maturity_lt1y": <number>, "csm_maturity_1to5y": <number>}\n\n',
+  ' "csm_new_business_life": <number>, "csm_finance_life": <number>,',
+  ' "csm_future_changes_life": <number>, "csm_release_life": <number>,',
+  ' "csm_other_life": <number>,',
+  ' "csm_opening_total": <sum nonlife+life opening>, "csm_closing_total": <sum nonlife+life closing>,',
+  ' "csm_new_business": <sum>, "csm_finance_result": <sum>,',
+  ' "csm_future_service_changes": <sum>, "csm_release": <sum>, "csm_other": <sum>}\n\n',
   "Text:\n", s3a_text
 ), "section_3a_csm")
 
 # 3b: Risk Adjustment rollforward
-s3b_text <- extract_pages(pages_text, c(257, 258, 263, 268, 269))
+# RA appears as a column in the total movement tables (2025 pages only):
+#   p257 = Non-Life total 2025, p259 = Non-Life GMM 2025,
+#   p263 = Health total 2025, p267 = Life total 2025, p269 = Life GMM/VFA 2025
+# p258 (Non-Life 2024) and p268 (Life total 2024) removed — they are prior-year tables.
+s3b_text <- extract_pages(pages_text, c(257, 259, 263, 267, 269))
 s3b <- call_claude(paste0(
   "From this Achmea 2025 annual report extract, find the Risk Adjustment (RA) rollforward ",
   "for 2025. Extract total and per-segment values (EUR millions).\n\n",
@@ -248,10 +303,16 @@ s3b <- call_claude(paste0(
 ), "section_3b_ra")
 
 # 3c: Loss component rollforward (GMM and PAA)
+# Pages are all 2025 movement tables in ascending order:
+#   p257=Non-Life total 2025, p259=Non-Life GMM 2025,
+#   p263=Health total 2025, p267=Life total 2025, p269=Life GMM/VFA 2025
+# Loss component appears as the "Loss component" column/row in these tables.
 s3c_text <- extract_pages(pages_text, PAGE_MAP$loss_component)
 s3c <- call_claude(paste0(
-  "From this Achmea 2025 annual report extract, find the Loss Component rollforward tables ",
-  "for 2025 — both for GMM/VFA contracts and PAA contracts. Extract values (EUR millions).\n\n",
+  "From this Achmea 2025 annual report extract (Non-Life, Health, and Life movement tables for 2025), ",
+  "find the Loss Component rows embedded within the movement tables. ",
+  "The loss component appears as a separate column in the 'Liabilities for remaining coverage' section. ",
+  "Extract values for 2025 only (ignore any 2024 tables). All values in EUR millions.\n\n",
   "Return JSON:\n",
   '{"lc_gmm_opening": <number>, "lc_gmm_losses_recognised": <number>,',
   ' "lc_gmm_new_business": <number>, "lc_gmm_systematic_alloc": <number>,',
@@ -493,12 +554,11 @@ write_row("30 years",  s2d$illiquid_30y, NA, NA, "Pg.275")
 write_row("50 years",  s2d$illiquid_50y, NA, NA, "Pg.275")
 blank()
 write_header("c) Supplementary information")
-write_row("i) Last Liquid point (years)",  s2d$last_liquid_point,    NA, NA, "Pg.273")
-write_row("ii) Long Term Forward Rate",    s2d$ltfr,                 NA, NA, "Pg.273")
-write_row("Cost of capital rate",          s2d$cost_of_capital_rate, NA, NA, "Pg.273")
-write_row("Confidence level - Life",       s2d$confidence_life,      NA, NA, "Pg.275")
-write_row("Confidence level - Non-Life",   s2d$confidence_nonlife,   NA, NA, "Pg.275")
-write_row("Confidence level - Health",     s2d$confidence_health,    NA, NA, "Pg.275")
+write_row("ii) Ultimate Forward Rate (UFR)", s2d$ufr,                    NA, NA, "Pg.275")
+write_row("Cost of capital rate",            s2d$cost_of_capital_rate,   NA, NA, "Pg.276")
+write_row("Confidence level - Life NL",      s2d$confidence_life_nl,     NA, NA, "Pg.277")
+write_row("Confidence level - Non-Life NL",  s2d$confidence_nonlife_nl,  NA, NA, "Pg.277")
+write_row("Confidence level - Health NL",    s2d$confidence_health_nl,   NA, NA, "Pg.277")
 blank(2)
 
 # ---- (3) LRC AND LIC DEEP-DIVE -----------------------------------------------
@@ -508,32 +568,29 @@ blank()
 write_header("(i.a) OVERVIEW OF CSM DEVELOPMENT:")
 write_row("a) Opening balance",              s3a$csm_opening_total,          NA, NA, "Note 7")
 write_row("b.1) New business",               s3a$csm_new_business,           NA, NA, "Note 7")
-write_row("b.2) Acquisitions",               s3a$csm_acquisitions,           NA, NA, "Note 7")
 write_row("c) Insurance finance results",    s3a$csm_finance_result,         NA, NA, "Note 7")
 write_row("d) Future service changes",       s3a$csm_future_service_changes, NA, NA, "Note 7")
 write_row("e) CSM release",                  s3a$csm_release,                NA, NA, "Note 7")
-write_row("f) Foreign currency",             s3a$csm_fx,                     NA, NA, "Note 7")
 write_row("g) Other",                        s3a$csm_other,                  NA, NA, "Note 7")
 write_row("h) Closing balance",              s3a$csm_closing_total,          NA, NA, "Note 7")
 blank()
 write_header("CSM DEVELOPMENT WITH SPLIT:")
-write_row("A) Opening balance (Non-Life GMM)", s3a$csm_opening_nonlife, NA, NA, "Note 7 [Pg.259-260]")
+write_row("A) Opening balance (Non-Life GMM)", s3a$csm_opening_nonlife, NA, NA, "Note 7 [Pg.259]")
 write_row("B) Opening balance (Life GMM & VFA)", s3a$csm_opening_life,  NA, NA, "Note 7 [Pg.269-270]")
-write_row("C) Opening balance (Health)",       s3a$csm_opening_health,  NA, NA, "Note 7")
-write_row("A.1) New business (Non-Life)",      s3a$csm_new_business_nonlife, NA, NA, "Note 7 [Pg.259-260]")
+write_row("  [Health GMM not separately disclosed — PAA-dominated portfolio]",
+          NA, NA, NA, "Note 7")
+write_row("A.1) New business (Non-Life)",      s3a$csm_new_business_nonlife, NA, NA, "Note 7 [Pg.259]")
 write_row("B.1) New business (Life)",          s3a$csm_new_business_life,    NA, NA, "Note 7 [Pg.269-270]")
-write_row("A.3) Finance (Non-Life)",           s3a$csm_finance_nonlife,      NA, NA, "Note 7 [Pg.259-260]")
+write_row("A.3) Finance (Non-Life)",           s3a$csm_finance_nonlife,      NA, NA, "Note 7 [Pg.259]")
 write_row("B.3) Finance (Life)",               s3a$csm_finance_life,         NA, NA, "Note 7 [Pg.269-270]")
-write_row("A.4) Future service (Non-Life)",    s3a$csm_future_changes_nonlife, NA, NA, "Note 7 [Pg.259-260]")
+write_row("A.4) Future service (Non-Life)",    s3a$csm_future_changes_nonlife, NA, NA, "Note 7 [Pg.259]")
 write_row("B.4) Future service (Life)",        s3a$csm_future_changes_life,  NA, NA, "Note 7 [Pg.269-270]")
-write_row("A.6) CSM release (Non-Life)",       s3a$csm_release_nonlife,      NA, NA, "Note 7 [Pg.259-260]")
+write_row("A.6) CSM release (Non-Life)",       s3a$csm_release_nonlife,      NA, NA, "Note 7 [Pg.259]")
 write_row("B.6) CSM release (Life)",           s3a$csm_release_life,         NA, NA, "Note 7 [Pg.269-270]")
-write_row("C.6) CSM release (Health)",         s3a$csm_release_health,       NA, NA, "Note 7")
-write_row("A.8) Other (Non-Life)",             s3a$csm_other_nonlife,        NA, NA, "Note 7 [Pg.259-260]")
+write_row("A.8) Other (Non-Life)",             s3a$csm_other_nonlife,        NA, NA, "Note 7 [Pg.259]")
 write_row("B.8) Other (Life)",                 s3a$csm_other_life,           NA, NA, "Note 7 [Pg.269-270]")
-write_row("A) Closing balance (Non-Life)",     s3a$csm_closing_nonlife,      NA, NA, "Note 7 [Pg.259-260]")
+write_row("A) Closing balance (Non-Life)",     s3a$csm_closing_nonlife,      NA, NA, "Note 7 [Pg.259]")
 write_row("B) Closing balance (Life)",         s3a$csm_closing_life,         NA, NA, "Note 7 [Pg.269-270]")
-write_row("C) Closing balance (Health)",       s3a$csm_closing_health,       NA, NA, "Note 7")
 blank()
 write_header("(i.b) CSM RELEASE MATURITY:")
 write_row("a) 0-1 year",   s3a$csm_maturity_lt1y, NA, NA, "Note 7 [Pg.254]")
