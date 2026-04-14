@@ -1,0 +1,21 @@
+# Secrets
+.Renviron
+.env
+*.env
+
+# Source PDFs (large, redistributed separately)
+*.pdf
+
+# R artefacts
+.Rhistory
+.RData
+.Rproj.user/
+*.Rcheck/
+*.tar.gz
+
+# renv
+renv/library/
+renv/staging/
+
+# OS
+.DS_Store
