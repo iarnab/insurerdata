@@ -119,23 +119,38 @@ PAGE_MAPS <- list(
   athora = list(
     pdf               = "annual-report-athora-netherlands-nv-2025.pdf",
     short_name        = "Athora NL",
-    balance_sheet     = c(78, 80),      # p78=consolidated statement of financial position
-    income_statement  = c(81, 82),
-    portfolio_overview = c(119),        # Product portfolio and measurement method overview
-    nonlife_movements = c(120, 121),    # LRC/LIC by measurement component (primarily life)
-    life_movements    = c(120, 121, 122, 124, 125, 126),
-    csm_rollforward   = c(122, 123, 127, 128), # CSM + RA rollforward tables
-    ra_rollforward    = c(122, 128, 129),
-    loss_component    = c(120, 121, 124, 125),
-    csm_maturity      = c(131, 132, 133),
-    insurance_svc_result = c(81, 82),
-    net_financial_result = c(81, 82),
-    discount_rates    = c(110, 111, 130), # p110=discount curve policy, p111=RA, p130=sensitivity
-    solvency          = c(4, 16, 177, 178, 179),
-    investments_note  = c(99, 100),
-    gross_premium     = c(81, 14, 15),   # p81: insurance revenue=2,110, service result=262; p14: gross inflows=3,960
-    disc_liquid_label    = "risk-free",
-    disc_illiquid_label  = "illiquidity adjusted"
+    balance_sheet     = c(80),           # p80=consolidated statement of financial position
+    income_statement  = c(81),           # p81=P&L: insurance revenue=2,110, service result=262, PBT=-237
+    # Athora is 100% Life (GMM+VFA). No Non-life, no Health, no PAA.
+    # p119 table: GMM=29,255, VFA=14,132, Total=43,387
+    # p80 balance sheet: insurance contract liabilities=43,387, reinsurance liabilities=104, reinsurance assets=3
+    portfolio_overview = c(80, 119),
+    nonlife_movements  = c(120),         # (none — all Life, kept for schema compat)
+    life_movements     = c(120, 122),    # p120=LRC table 2025; p122=measurement component 2025
+    # S3 pages: only 2 unique pages needed (was 11 page-slots across 3 old calls)
+    # p122: CSM columns (opening=1,994/closing=2,645) + RA column (opening=942/closing=746)
+    # p120: Loss component column (opening=98/closing=85)
+    csm_rollforward   = c(122),
+    ra_rollforward    = c(122),
+    loss_component    = c(120),
+    # p131=coverage units + acquisition cash flow note; p132=cash flow maturity by due date
+    # (Athora does not publish a CSM-release-by-time-bucket table; maturity fields may be null)
+    csm_maturity      = c(131, 132),
+    # p81=income statement (CSM release=-197, RA release=-36 implicit in service result)
+    # p120=LRC table (explicit CSM/RA release lines); p122=measurement component (CSM/RA columns)
+    insurance_svc_result = c(81, 120, 122),
+    net_financial_result = c(81),
+    # p129=rate table: Liquid/Illiquid for 1y/5y/10y/15y/20y/30y/50y (exact column headers "Liquid"/"Illiquid")
+    # p130=methodology: UFR=3.3%, Last Liquid Point=20y, CoC implied, confidence=68.7%
+    discount_rates    = c(129, 130),
+    # p177=SII ratio=197%, eligible own funds=3,532, SCR=1,790; p178=breakdown detail
+    solvency          = c(177, 178),
+    investments_note  = c(99, 100),      # p99: bonds=16,313, mortgages=3,282, total=66,502 (all FVTPL)
+    # p14: Gross Written Premium=3,147, Gross Inflows=3,960, Net inflow PPI=813
+    # p81: insurance revenue=2,110 (IFRS 17 line, best proxy if GWP not available)
+    gross_premium     = c(14, 81),
+    disc_liquid_label    = "Liquid",    # exact column header on p129
+    disc_illiquid_label  = "Illiquid"  # exact column header on p129
   )
 )
 
