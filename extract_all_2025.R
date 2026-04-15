@@ -75,13 +75,13 @@ PAGE_MAPS <- list(
     ra_rollforward    = c(316, 319, 321, 323),
     loss_component    = c(316, 317, 321, 322),
     csm_maturity      = c(323, 324),
-    insurance_svc_result = c(289, 290),
+    insurance_svc_result = c(289, 290, 291, 292), # p289-292: insurance service result + note detail incl CSM/RA release
     net_financial_result = c(290, 291),
     discount_rates    = c(329, 330),    # p329=actuarial assumptions incl UFR/CoC/confidence
                                         # p330=discount curve description + coverage units
-    solvency          = c(65, 66, 67),
+    solvency          = c(406),            # p406: EOF=12,618 (excl FI), SCR=5,743, ratio=220%
     investments_note  = c(306, 307, 308),
-    gross_premium     = c(295, 296, 297),
+    gross_premium     = c(286, 287, 288, 295, 296, 297), # segment P&L + insurance service result
     # Notes on discount curve:
     # - UFR = 3.20% (2025), FSP = 20 years, based on 6-month EURIBOR swap
     # - CoC = 6%; confidence 1-year 95-98%, ultimate 66-76%
@@ -95,7 +95,7 @@ PAGE_MAPS <- list(
     short_name        = "NN Group",
     balance_sheet     = c(161, 162),
     income_statement  = c(163),
-    portfolio_overview = c(193, 195),   # GMM/VFA table 2025 + segment note
+    portfolio_overview = c(193, 195, 221, 222), # GMM/VFA table + segment note + p221/222 segment breakdown
     nonlife_movements = c(200, 201),    # PAA movements 2025
     life_movements    = c(193, 194),    # GMM/VFA movements 2025
     csm_rollforward   = c(193, 195, 196), # GMM/VFA with CSM disaggregation
@@ -106,8 +106,8 @@ PAGE_MAPS <- list(
     net_financial_result = c(163, 164),
     discount_rates    = c(191, 192),    # Discount curve methodology + confidence levels
     solvency          = c(37, 38, 45),
-    investments_note  = c(161, 162),    # Balance sheet contains investment breakdown
-    gross_premium     = c(163),
+    investments_note  = c(173, 174, 175, 176), # p173-176: investment breakdown + FVTPL split (policyholders=47,925 + company=8,645)
+    gross_premium     = c(163, 221),    # p163: income statement, p221: GWP Life=8,787 Non-life=4,469 Total=13,256
     disc_liquid_label    = "liquid risk-free",
     disc_illiquid_label  = "illiquidity premium"
   ),
@@ -129,7 +129,7 @@ PAGE_MAPS <- list(
     discount_rates    = c(110, 111, 130), # p110=discount curve policy, p111=RA, p130=sensitivity
     solvency          = c(4, 16, 177, 178, 179),
     investments_note  = c(99, 100),
-    gross_premium     = c(14, 15, 81),
+    gross_premium     = c(81, 14, 15),   # p81: insurance revenue=2,110, service result=262; p14: gross inflows=3,960
     disc_liquid_label    = "risk-free",
     disc_illiquid_label  = "illiquidity adjusted"
   )
@@ -173,21 +173,17 @@ call_claude <- function(prompt_text, section_name, insurer_name) {
 
   body <- resp_body_json(resp)
   raw  <- body$content[[1]]$text
-  # Strip markdown fences then truncate at the last } to remove trailing prose
-  clean <- gsub("^```(?:json)?\\s*", "", trimws(raw), perl = TRUE)
-  clean <- gsub("```[\\s\\S]*$", "", clean, perl = TRUE)
-  last_brace <- max(gregexpr("}", clean, fixed = TRUE)[[1]])
-  if (last_brace > 0) clean <- substr(clean, 1, last_brace)
-  clean <- trimws(clean)
+  # Extract the first complete flat JSON object.
+  # [^{}]* correctly ignores any } characters in prose that follows the JSON,
+  # and handles prose-before-fence, prose-after-fence, and bare JSON equally.
+  # All our prompts request flat scalar JSON with no nested {}, so this is safe.
+  clean <- trimws(raw)
+  m <- regmatches(clean, regexpr("\\{[^{}]*\\}", clean, perl = TRUE))
+  clean <- if (length(m) == 1L) m else ""
 
   tryCatch(
     fromJSON(clean, simplifyVector = FALSE),
     error = function(e) {
-      # Second attempt: pull out first complete JSON object
-      m <- regmatches(clean, regexpr("\\{[\\s\\S]*\\}", clean, perl = TRUE))
-      if (length(m) == 1) {
-        tryCatch(return(fromJSON(m, simplifyVector = FALSE)), error = function(e2) NULL)
-      }
       warning(glue::glue("JSON parse failed for {label}: {conditionMessage(e)}\nRaw: {raw}"))
       NULL
     }
@@ -383,8 +379,11 @@ extract_insurer <- function(pm) {
   message(glue::glue("\n[S6] Gross written premium ({insurer})..."))
   s6_text <- extract_pages(pages_text, pm$gross_premium)
   res$s6 <- call_claude(paste0(
-    "From this ", insurer, " 2025 annual report extract, find gross written premium or insurance revenue ",
-    "split by Life, Non-Life, Health/Disability and total for 2025 (EUR millions).\n\n",
+    "From this ", insurer, " 2025 annual report extract, find gross written premium (GWP) or insurance revenue ",
+    "split by Life, Non-Life, Health/Disability and total for 2025 (EUR millions). ",
+    "If GWP is not available, use insurance revenue totals by segment as the best proxy. ",
+    "Look for segment tables, notes with premium income, or consolidated income statement lines ",
+    "that break out Life / Non-Life / Health / Pensions / International.\n\n",
     "Return JSON:\n",
     '{"gwp_life": <number or null>, "gwp_health": <number or null>,',
     ' "gwp_nonlife": <number or null>, "gwp_pensions": <number or null>,',
