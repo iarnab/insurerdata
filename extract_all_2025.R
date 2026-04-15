@@ -95,7 +95,7 @@ PAGE_MAPS <- list(
     short_name        = "NN Group",
     balance_sheet     = c(161, 162),
     income_statement  = c(163),
-    portfolio_overview = c(193, 195, 221, 222), # GMM/VFA table + segment note + p221/222 segment breakdown
+    portfolio_overview = c(192, 221),   # p192: insurance contracts by measurement model (Life GMM/VFA, Non-life GMM/PAA); p221: by segment
     nonlife_movements = c(200, 201),    # PAA movements 2025
     life_movements    = c(193, 194),    # GMM/VFA movements 2025
     csm_rollforward   = c(193, 195, 196), # GMM/VFA with CSM disaggregation
@@ -108,8 +108,12 @@ PAGE_MAPS <- list(
     solvency          = c(37, 38, 45),
     investments_note  = c(173, 174, 175, 176), # p173-176: investment breakdown + FVTPL split (policyholders=47,925 + company=8,645)
     gross_premium     = c(163, 221),    # p163: income statement, p221: GWP Life=8,787 Non-life=4,469 Total=13,256
-    disc_liquid_label    = "liquid risk-free",
-    disc_illiquid_label  = "illiquidity premium"
+    # p191 table columns are "General Model" (liquid) and "Variable Fee Approach" (illiquid).
+    # Maturities in table: 1y, 5y, 10y, 20y, 30y, 40y. No 15y or 50y rows.
+    # LTFR = 3.20% (maps to ufr). LLP = 30 years (maps to fsp_years). CoC = 4%.
+    # p192 confidence: Life 1y=86% / ult=67%, Non-life 1y=67% / ult=62%.
+    disc_liquid_label    = "General Model",
+    disc_illiquid_label  = "Variable Fee Approach"
   ),
 
   athora = list(
@@ -137,8 +141,24 @@ PAGE_MAPS <- list(
 
 # ---- Helpers -----------------------------------------------------------------
 
+# Strip navigation chrome that appears on every page of Dutch insurer reports:
+# header band ("... Annual accounts ... Other information ... Appendix") and
+# page footer ("[Company] Annual Report 20xx | NNN").
+# Also collapses runs of 3+ spaces to 2 — preserves table column alignment
+# while meaningfully reducing token count (~15-20% per page).
+clean_page_text <- function(text) {
+  lines <- strsplit(text, "\n", fixed = TRUE)[[1]]
+  lines <- lines[!grepl("Annual accounts.{1,60}Other information.{1,60}Appendix", lines)]
+  lines <- lines[!grepl("Annual Report 20\\d{2}\\s*\\|\\s*\\d{1,4}\\s*$", lines)]
+  lines <- gsub(" {3,}", "  ", lines)
+  lines <- lines[nzchar(trimws(lines))]
+  paste(lines, collapse = "\n")
+}
+
 extract_pages <- function(pages_text, page_nums) {
-  paste(pages_text[page_nums], collapse = "\n\n---PAGE BREAK---\n\n")
+  cleaned <- vapply(pages_text[page_nums], clean_page_text, character(1L),
+                    USE.NAMES = FALSE)
+  paste(cleaned, collapse = "\n\n---PAGE BREAK---\n\n")
 }
 
 call_claude <- function(prompt_text, section_name, insurer_name) {
@@ -210,16 +230,19 @@ extract_insurer <- function(pm) {
   s1_text <- extract_pages(pages_text, pm$portfolio_overview)
   res$s1 <- call_claude(paste0(
     "From this ", insurer, " 2025 annual report extract (IFRS 17 insurance contract overview), ",
-    "extract 31 December 2025 balance sheet values (EUR millions, net liabilities = liabilities minus assets). ",
-    "Look for a summary table showing insurance contract liabilities by measurement model and segment.\n\n",
+    "extract 31 December 2025 net balance sheet values (EUR millions, net = liabilities minus assets). ",
+    "Look for a summary table showing insurance contract liabilities by measurement model. ",
+    "The table may have rows for Life insurance contracts and Non-life insurance contracts, ",
+    "with columns for General Model (GMM), Variable Fee Approach (VFA), Premium Allocation Approach (PAA) and Total. ",
+    "Use the net total row (liabilities minus assets) for each segment.\n\n",
     "Return JSON:\n",
     '{"life_gmm": <Life GMM net>, "life_vfa": <Life VFA net>, "life_paa": <Life PAA net>,',
     ' "life_total": <Life total net>,',
     ' "nonlife_gmm": <Non-Life GMM net>, "nonlife_paa": <Non-Life PAA net>, "nonlife_total": <Non-Life total net>,',
     ' "health_gmm": <Health GMM net or null>, "health_paa": <Health PAA net or null>, "health_total": <Health total net or null>,',
     ' "total_gmm": <total GMM>, "total_vfa": <total VFA>, "total_paa": <total PAA>,',
-    ' "total_direct": <grand total direct insurance contracts>,',
-    ' "reins_total": <total outward reinsurance contracts held net>}\n\n',
+    ' "total_direct": <grand total direct insurance contracts net>,',
+    ' "reins_total": <total outward reinsurance contracts held net or null>}\n\n',
     "Text:\n", s1_text
   ), "portfolio_overview", insurer)
 
@@ -255,17 +278,17 @@ extract_insurer <- function(pm) {
     "- For min-max ranges (e.g. 2,17-2,41) return the midpoint.\n",
     "- '", pm$disc_liquid_label, "' maps to liquid_* keys.\n",
     "- '", pm$disc_illiquid_label, "' maps to illiquid_* keys.\n",
-    "- UFR / Ultimate Forward Rate: convert to decimal.\n",
-    "- FSP / First Smoothing Point / Last Liquid Point: return as integer years.\n",
+    "- UFR / Ultimate Forward Rate / LTFR (Long-Term Forward Rate): convert to decimal and return as ufr.\n",
+    "- FSP / First Smoothing Point / Last Liquid Point (LLP): return as integer years and return as fsp_years.\n",
     "- Cost of capital rate: convert to decimal.\n",
     "- Confidence levels: look for % figures linked to Non-Life, Life, Health.\n\n",
     "Return JSON:\n",
     '{"liquid_1y": <number or null>, "liquid_5y": <number or null>, "liquid_10y": <number or null>,',
     ' "liquid_15y": <number or null>, "liquid_20y": <number or null>,',
-    ' "liquid_30y": <number or null>, "liquid_50y": <number or null>,',
+    ' "liquid_30y": <number or null>, "liquid_40y": <number or null>, "liquid_50y": <number or null>,',
     ' "illiquid_1y": <number or null>, "illiquid_5y": <number or null>, "illiquid_10y": <number or null>,',
     ' "illiquid_15y": <number or null>, "illiquid_20y": <number or null>,',
-    ' "illiquid_30y": <number or null>, "illiquid_50y": <number or null>,',
+    ' "illiquid_30y": <number or null>, "illiquid_40y": <number or null>, "illiquid_50y": <number or null>,',
     ' "ufr": <decimal or null>, "fsp_years": <integer or null>,',
     ' "cost_of_capital_rate": <decimal or null>,',
     ' "confidence_nonlife": <decimal or null>, "confidence_life": <decimal or null>,',
@@ -273,67 +296,52 @@ extract_insurer <- function(pm) {
     "Text:\n", s2d_text
   ), "discount_rates", insurer)
 
-  # ---- S3a: CSM rollforward ---------------------------------------------------
-  message(glue::glue("\n[S3a] CSM rollforward ({insurer})..."))
-  s3a_text <- extract_pages(pages_text, pm$csm_rollforward)
-  res$s3a <- call_claude(paste0(
-    "From this ", insurer, " 2025 annual report extract, extract the Contractual Service Margin (CSM) ",
-    "rollforward for 2025 (EUR millions). ",
-    "The CSM may appear as dedicated rollforward tables or as columns within GMM movement tables. ",
-    "For embedded CSM columns: sum 'Contracts under fair value approach' + 'Other contracts' = Total CSM. ",
-    "Extract 2025 figures only (ignore 2024 comparative tables).\n\n",
-    "Row label guidance:\n",
-    "  opening = Balance at 1 January\n",
-    "  csm_new_business = Contracts initially recognised / New business\n",
-    "  csm_future_changes = Changes in estimates adjusting CSM / Future service changes\n",
-    "  csm_finance_result = Financial income and expenses on CSM / Insurance finance result on CSM\n",
-    "  csm_release = CSM recognised for services provided (typically negative)\n",
-    "  csm_other = FX, acquisitions, other\n",
-    "  closing = Balance at 31 December\n\n",
-    "Return JSON:\n",
-    '{"csm_opening_total": <number>, "csm_new_business": <number>,',
-    ' "csm_future_service_changes": <number>, "csm_finance_result": <number>,',
-    ' "csm_release": <number>, "csm_other": <number>, "csm_closing_total": <number>,',
-    ' "csm_opening_nonlife": <number or null>, "csm_closing_nonlife": <number or null>,',
-    ' "csm_release_nonlife": <number or null>, "csm_new_business_nonlife": <number or null>,',
-    ' "csm_opening_life": <number or null>, "csm_closing_life": <number or null>,',
-    ' "csm_release_life": <number or null>, "csm_new_business_life": <number or null>}\n\n',
-    "Text:\n", s3a_text
-  ), "csm_rollforward", insurer)
-
-  # ---- S3b: Risk adjustment rollforward ----------------------------------------
-  message(glue::glue("\n[S3b] Risk adjustment rollforward ({insurer})..."))
-  s3b_text <- extract_pages(pages_text, pm$ra_rollforward)
-  res$s3b <- call_claude(paste0(
-    "From this ", insurer, " 2025 annual report extract, extract the Risk Adjustment (RA) rollforward ",
-    "for 2025 (EUR millions). The RA may appear as a standalone table or as a column in the movement tables. ",
-    "Extract 2025 figures only.\n\n",
-    "Return JSON:\n",
-    '{"ra_opening_total": <number>, "ra_new_business": <number>,',
-    ' "ra_future_service_adj_csm": <number or null>, "ra_future_service_no_csm": <number or null>,',
-    ' "ra_past_service": <number or null>, "ra_finance_result": <number or null>,',
-    ' "ra_release": <number>, "ra_other": <number or null>, "ra_closing_total": <number>,',
-    ' "ra_opening_nonlife": <number or null>, "ra_closing_nonlife": <number or null>,',
-    ' "ra_opening_life": <number or null>, "ra_closing_life": <number or null>}\n\n',
-    "Text:\n", s3b_text
-  ), "ra_rollforward", insurer)
-
-  # ---- S3c: Loss component ----------------------------------------------------
-  message(glue::glue("\n[S3c] Loss component ({insurer})..."))
-  s3c_text <- extract_pages(pages_text, pm$loss_component)
-  res$s3c <- call_claude(paste0(
-    "From this ", insurer, " 2025 annual report extract, find the Loss Component rollforward for 2025. ",
-    "The loss component appears as a column in the LRC (Liabilities for Remaining Coverage) movement tables. ",
-    "Extract 2025 figures only (EUR millions).\n\n",
-    "Return JSON:\n",
-    '{"lc_opening_total": <number>, "lc_losses_recognised": <number>,',
-    ' "lc_systematic_alloc": <number or null>, "lc_future_service_changes": <number or null>,',
-    ' "lc_finance": <number or null>, "lc_other": <number or null>, "lc_closing_total": <number>,',
-    ' "lc_opening_nonlife": <number or null>, "lc_closing_nonlife": <number or null>,',
-    ' "lc_opening_life": <number or null>, "lc_closing_life": <number or null>,',
-    ' "lc_opening_health": <number or null>, "lc_closing_health": <number or null>}\n\n',
-    "Text:\n", s3c_text
-  ), "loss_component", insurer)
+  # ---- S3: LRC deep-dive (CSM + RA + Loss component) — single merged call -----
+  # Deduplicate pages across the three sections; send each page only once.
+  # Achmea: 13 page-slots → 6 unique | ASR: 10 → 6 | NN: 10 → 7 | Athora: 11 → 9
+  message(glue::glue("\n[S3] LRC deep-dive ({insurer})..."))
+  s3_pages <- sort(unique(c(pm$csm_rollforward, pm$ra_rollforward, pm$loss_component)))
+  s3_text  <- extract_pages(pages_text, s3_pages)
+  res$s3 <- call_claude(paste0(
+    "From this ", insurer, " 2025 annual report extract (LRC/LIC movement tables), ",
+    "extract ALL THREE of the following for 2025 (EUR millions). ",
+    "Extract 2025 figures only — ignore 2024 comparative columns/tables.\n\n",
+    "(A) CSM ROLLFORWARD: CSM may appear as dedicated columns or embedded in GMM tables.\n",
+    "  csm_opening_total = opening balance; csm_new_business = contracts initially recognised;\n",
+    "  csm_future_service_changes = changes in estimates adjusting CSM;\n",
+    "  csm_finance_result = finance result on CSM; csm_release = CSM for services provided (negative);\n",
+    "  csm_other = FX/acquisitions/other; csm_closing_total = closing balance.\n",
+    "  Also split by segment where available: csm_*_nonlife and csm_*_life.\n\n",
+    "(B) RISK ADJUSTMENT (RA) ROLLFORWARD: RA as standalone table or column.\n",
+    "  ra_opening_total, ra_new_business, ra_future_service_adj_csm, ra_future_service_no_csm,\n",
+    "  ra_past_service, ra_finance_result, ra_release, ra_other, ra_closing_total.\n",
+    "  Segment splits: ra_opening_nonlife, ra_closing_nonlife, ra_opening_life, ra_closing_life.\n\n",
+    "(C) LOSS COMPONENT: column in LRC movement tables.\n",
+    "  lc_opening_total, lc_losses_recognised, lc_systematic_alloc, lc_future_service_changes,\n",
+    "  lc_finance, lc_other, lc_closing_total.\n",
+    "  Segment splits: lc_opening_nonlife, lc_closing_nonlife, lc_opening_life, lc_closing_life,\n",
+    "  lc_opening_health, lc_closing_health.\n\n",
+    "Return ONE JSON with all fields (use null for any value not found):\n",
+    '{"csm_opening_total": <n>, "csm_new_business": <n>, "csm_future_service_changes": <n>,',
+    ' "csm_finance_result": <n>, "csm_release": <n>, "csm_other": <n>, "csm_closing_total": <n>,',
+    ' "csm_opening_nonlife": <n>, "csm_closing_nonlife": <n>,',
+    ' "csm_release_nonlife": <n>, "csm_new_business_nonlife": <n>,',
+    ' "csm_opening_life": <n>, "csm_closing_life": <n>,',
+    ' "csm_release_life": <n>, "csm_new_business_life": <n>,',
+    ' "ra_opening_total": <n>, "ra_new_business": <n>,',
+    ' "ra_future_service_adj_csm": <n>, "ra_future_service_no_csm": <n>,',
+    ' "ra_past_service": <n>, "ra_finance_result": <n>,',
+    ' "ra_release": <n>, "ra_other": <n>, "ra_closing_total": <n>,',
+    ' "ra_opening_nonlife": <n>, "ra_closing_nonlife": <n>,',
+    ' "ra_opening_life": <n>, "ra_closing_life": <n>,',
+    ' "lc_opening_total": <n>, "lc_losses_recognised": <n>,',
+    ' "lc_systematic_alloc": <n>, "lc_future_service_changes": <n>,',
+    ' "lc_finance": <n>, "lc_other": <n>, "lc_closing_total": <n>,',
+    ' "lc_opening_nonlife": <n>, "lc_closing_nonlife": <n>,',
+    ' "lc_opening_life": <n>, "lc_closing_life": <n>,',
+    ' "lc_opening_health": <n>, "lc_closing_health": <n>}\n\n',
+    "Text:\n", s3_text
+  ), "lrc_deepdive", insurer)
 
   # ---- S3d: CSM maturity ------------------------------------------------------
   message(glue::glue("\n[S3d] CSM maturity ({insurer})..."))
@@ -421,7 +429,7 @@ write_insurer_tab <- function(wb, ws, insurer_name, res, pm) {
   sv    <- function(x) safe_val(x)
 
   s1  <- res$s1;  s2a <- res$s2a; s2d <- res$s2d
-  s3a <- res$s3a; s3b <- res$s3b; s3c <- res$s3c; s3d <- res$s3d
+  s3  <- res$s3;  s3d <- res$s3d   # s3 holds merged CSM + RA + LC rollforward
   s4  <- res$s4;  s5  <- res$s5;  s6  <- res$s6
 
   # Title
@@ -488,6 +496,7 @@ write_insurer_tab <- function(wb, ws, insurer_name, res, pm) {
   write_row("15 years", sv(s2d$liquid_15y), "Discount note")
   write_row("20 years", sv(s2d$liquid_20y), "Discount note")
   write_row("30 years", sv(s2d$liquid_30y), "Discount note")
+  write_row("40 years", sv(s2d$liquid_40y), "Discount note")
   write_row("50 years", sv(s2d$liquid_50y), "Discount note")
   blank()
   write_header("b) Illiquid curve (Life / VFA)")
@@ -497,6 +506,7 @@ write_insurer_tab <- function(wb, ws, insurer_name, res, pm) {
   write_row("15 years", sv(s2d$illiquid_15y), "Discount note")
   write_row("20 years", sv(s2d$illiquid_20y), "Discount note")
   write_row("30 years", sv(s2d$illiquid_30y), "Discount note")
+  write_row("40 years", sv(s2d$illiquid_40y), "Discount note")
   write_row("50 years", sv(s2d$illiquid_50y), "Discount note")
   blank()
   write_header("c) Supplementary")
@@ -512,25 +522,25 @@ write_insurer_tab <- function(wb, ws, insurer_name, res, pm) {
   write_header("(4) LRC / LIC DEEP-DIVE")
   blank()
   write_header("(i.a) CSM DEVELOPMENT — TOTAL")
-  write_row("a) Opening balance",          sv(s3a$csm_opening_total),          "Note 7")
-  write_row("b) New business",             sv(s3a$csm_new_business),           "Note 7")
-  write_row("c) Finance result",           sv(s3a$csm_finance_result),         "Note 7")
-  write_row("d) Future service changes",   sv(s3a$csm_future_service_changes), "Note 7")
-  write_row("e) CSM release",              sv(s3a$csm_release),                "Note 7")
-  write_row("f) Other / FX",              sv(s3a$csm_other),                  "Note 7")
-  write_row("g) Closing balance",          sv(s3a$csm_closing_total),          "Note 7")
+  write_row("a) Opening balance",          sv(s3$csm_opening_total),          "Note 7")
+  write_row("b) New business",             sv(s3$csm_new_business),           "Note 7")
+  write_row("c) Finance result",           sv(s3$csm_finance_result),         "Note 7")
+  write_row("d) Future service changes",   sv(s3$csm_future_service_changes), "Note 7")
+  write_row("e) CSM release",              sv(s3$csm_release),                "Note 7")
+  write_row("f) Other / FX",              sv(s3$csm_other),                  "Note 7")
+  write_row("g) Closing balance",          sv(s3$csm_closing_total),          "Note 7")
   blank()
   write_header("(i.b) CSM — NON-LIFE SPLIT")
-  write_row("Opening",      sv(s3a$csm_opening_nonlife),     "Note 7")
-  write_row("New business", sv(s3a$csm_new_business_nonlife),"Note 7")
-  write_row("Release",      sv(s3a$csm_release_nonlife),     "Note 7")
-  write_row("Closing",      sv(s3a$csm_closing_nonlife),     "Note 7")
+  write_row("Opening",      sv(s3$csm_opening_nonlife),     "Note 7")
+  write_row("New business", sv(s3$csm_new_business_nonlife),"Note 7")
+  write_row("Release",      sv(s3$csm_release_nonlife),     "Note 7")
+  write_row("Closing",      sv(s3$csm_closing_nonlife),     "Note 7")
   blank()
   write_header("(i.c) CSM — LIFE SPLIT")
-  write_row("Opening",      sv(s3a$csm_opening_life),     "Note 7")
-  write_row("New business", sv(s3a$csm_new_business_life),"Note 7")
-  write_row("Release",      sv(s3a$csm_release_life),     "Note 7")
-  write_row("Closing",      sv(s3a$csm_closing_life),     "Note 7")
+  write_row("Opening",      sv(s3$csm_opening_life),     "Note 7")
+  write_row("New business", sv(s3$csm_new_business_life),"Note 7")
+  write_row("Release",      sv(s3$csm_release_life),     "Note 7")
+  write_row("Closing",      sv(s3$csm_closing_life),     "Note 7")
   blank()
   write_header("(i.d) CSM MATURITY")
   write_row("0-1 year",    sv(s3d$csm_maturity_lt1y),   "Note 7")
@@ -541,37 +551,37 @@ write_insurer_tab <- function(wb, ws, insurer_name, res, pm) {
   blank(2)
 
   write_header("(ii.a) RISK ADJUSTMENT DEVELOPMENT — TOTAL")
-  write_row("a) Opening balance",              sv(s3b$ra_opening_total),          "Note 7")
-  write_row("b) New business",                 sv(s3b$ra_new_business),           "Note 7")
-  write_row("c) Finance result",               sv(s3b$ra_finance_result),         "Note 7")
-  write_row("d.i) Future svc (adj CSM)",       sv(s3b$ra_future_service_adj_csm), "Note 7")
-  write_row("d.ii) Future svc (no CSM)",       sv(s3b$ra_future_service_no_csm),  "Note 7")
-  write_row("e) Past service",                 sv(s3b$ra_past_service),           "Note 7")
-  write_row("f) RA release",                   sv(s3b$ra_release),                "Note 7")
-  write_row("g) Other / FX",                  sv(s3b$ra_other),                  "Note 7")
-  write_row("h) Closing balance",              sv(s3b$ra_closing_total),          "Note 7")
+  write_row("a) Opening balance",              sv(s3$ra_opening_total),          "Note 7")
+  write_row("b) New business",                 sv(s3$ra_new_business),           "Note 7")
+  write_row("c) Finance result",               sv(s3$ra_finance_result),         "Note 7")
+  write_row("d.i) Future svc (adj CSM)",       sv(s3$ra_future_service_adj_csm), "Note 7")
+  write_row("d.ii) Future svc (no CSM)",       sv(s3$ra_future_service_no_csm),  "Note 7")
+  write_row("e) Past service",                 sv(s3$ra_past_service),           "Note 7")
+  write_row("f) RA release",                   sv(s3$ra_release),                "Note 7")
+  write_row("g) Other / FX",                  sv(s3$ra_other),                  "Note 7")
+  write_row("h) Closing balance",              sv(s3$ra_closing_total),          "Note 7")
   blank()
-  write_row("RA Non-Life — opening", sv(s3b$ra_opening_nonlife), "Note 7")
-  write_row("RA Non-Life — closing", sv(s3b$ra_closing_nonlife), "Note 7")
-  write_row("RA Life — opening",     sv(s3b$ra_opening_life),    "Note 7")
-  write_row("RA Life — closing",     sv(s3b$ra_closing_life),    "Note 7")
+  write_row("RA Non-Life — opening", sv(s3$ra_opening_nonlife), "Note 7")
+  write_row("RA Non-Life — closing", sv(s3$ra_closing_nonlife), "Note 7")
+  write_row("RA Life — opening",     sv(s3$ra_opening_life),    "Note 7")
+  write_row("RA Life — closing",     sv(s3$ra_closing_life),    "Note 7")
   blank(2)
 
   write_header("(iii) LOSS COMPONENT")
-  write_row("Opening total",          sv(s3c$lc_opening_total),          "Note 7")
-  write_row("Losses recognised",      sv(s3c$lc_losses_recognised),      "Note 7")
-  write_row("Systematic allocation",  sv(s3c$lc_systematic_alloc),       "Note 7")
-  write_row("Future service changes", sv(s3c$lc_future_service_changes), "Note 7")
-  write_row("Finance",                sv(s3c$lc_finance),                "Note 7")
-  write_row("Other",                  sv(s3c$lc_other),                  "Note 7")
-  write_row("Closing total",          sv(s3c$lc_closing_total),          "Note 7")
+  write_row("Opening total",          sv(s3$lc_opening_total),          "Note 7")
+  write_row("Losses recognised",      sv(s3$lc_losses_recognised),      "Note 7")
+  write_row("Systematic allocation",  sv(s3$lc_systematic_alloc),       "Note 7")
+  write_row("Future service changes", sv(s3$lc_future_service_changes), "Note 7")
+  write_row("Finance",                sv(s3$lc_finance),                "Note 7")
+  write_row("Other",                  sv(s3$lc_other),                  "Note 7")
+  write_row("Closing total",          sv(s3$lc_closing_total),          "Note 7")
   blank()
-  write_row("Non-Life LC opening",    sv(s3c$lc_opening_nonlife), "Note 7")
-  write_row("Non-Life LC closing",    sv(s3c$lc_closing_nonlife), "Note 7")
-  write_row("Life LC opening",        sv(s3c$lc_opening_life),    "Note 7")
-  write_row("Life LC closing",        sv(s3c$lc_closing_life),    "Note 7")
-  write_row("Health LC opening",      sv(s3c$lc_opening_health),  "Note 7")
-  write_row("Health LC closing",      sv(s3c$lc_closing_health),  "Note 7")
+  write_row("Non-Life LC opening",    sv(s3$lc_opening_nonlife), "Note 7")
+  write_row("Non-Life LC closing",    sv(s3$lc_closing_nonlife), "Note 7")
+  write_row("Life LC opening",        sv(s3$lc_opening_life),    "Note 7")
+  write_row("Life LC closing",        sv(s3$lc_closing_life),    "Note 7")
+  write_row("Health LC opening",      sv(s3$lc_opening_health),  "Note 7")
+  write_row("Health LC closing",      sv(s3$lc_closing_health),  "Note 7")
   blank(2)
 
   # ---- (5) SOLVENCY -----------------------------------------------------------
@@ -622,19 +632,35 @@ write_insurer_tab <- function(wb, ws, insurer_name, res, pm) {
 # MAIN — extract all four insurers and write workbook
 # ==============================================================================
 
-message("\n", paste(rep("=", 60), collapse = ""))
+message("\n", strrep("=", 60))
 message("IFRS 17 Extraction — All Insurers 2025")
-message(paste(rep("=", 60), collapse = ""))
+message(strrep("=", 60))
+
+# Note: mclapply / fork-based parallelism is unsafe here because both pdftools
+# (poppler C lib) and httr2 (curl/OpenSSL) have shared library state that does
+# not survive fork on macOS. Sequential lapply is correct and reliable.
+message(glue::glue("Extracting {length(PAGE_MAPS)} insurers sequentially..."))
+
+t0 <- proc.time()
+
+results <- lapply(PAGE_MAPS, extract_insurer)
+
+elapsed <- round((proc.time() - t0)[["elapsed"]])
+message(glue::glue("\nAll extractions done in {elapsed}s."))
 
 wb <- createWorkbook()
 
 for (key in names(PAGE_MAPS)) {
-  pm     <- PAGE_MAPS[[key]]
-  ws     <- pm$short_name
-  result <- extract_insurer(pm)
-  message(glue::glue("\nAssembling tab: {ws}"))
+  pm  <- PAGE_MAPS[[key]]
+  ws  <- pm$short_name
+  res <- results[[key]]
+  if (is.null(res) || inherits(res, "try-error")) {
+    message(glue::glue("WARNING: {ws} extraction failed — skipping tab."))
+    next
+  }
+  message(glue::glue("Assembling tab: {ws}"))
   addWorksheet(wb, ws)
-  write_insurer_tab(wb, ws, pm$short_name, result, pm)
+  write_insurer_tab(wb, ws, pm$short_name, res, pm)
 }
 
 message("\nSaving workbook...")
