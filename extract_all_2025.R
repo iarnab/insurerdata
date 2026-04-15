@@ -74,20 +74,21 @@ PAGE_MAPS <- list(
     csm_rollforward   = c(319, 323),    # Non-life GMM (319) + Life GMM/VFA (323) 2025
     ra_rollforward    = c(316, 319, 321, 323),
     loss_component    = c(316, 317, 321, 322),
-    csm_maturity      = c(323, 324),
-    insurance_svc_result = c(289, 290, 291, 292), # p289-292: insurance service result + note detail incl CSM/RA release
-    net_financial_result = c(290, 291),
-    discount_rates    = c(329, 330),    # p329=actuarial assumptions incl UFR/CoC/confidence
-                                        # p330=discount curve description + coverage units
-    solvency          = c(406),            # p406: EOF=12,618 (excl FI), SCR=5,743, ratio=220%
+    csm_maturity      = c(332, 339),     # p332=GMM maturity table (section 7.5.13.6); p339=VFA maturity table (section 7.5.14.3)
+    insurance_svc_result = c(347, 348),  # p347=7.6.1 insurance contract revenue (CSM/RA release by segment)
+                                         # p348=insurance contract revenue reconciliation
+    net_financial_result = c(350),       # p350=section 7.6.7 investment and finance result
+    discount_rates    = c(329, 330),     # p329=actuarial assumptions (UFR=3.20%, FSP=20y, CoC=6%, confidence 95-98%)
+                                         # p330=discount curve table: 0%(min)=liquid, 100%(max)=illiquid, maturities 1-50y
+    solvency          = c(406),          # p406: EOF=12,618 (excl FI), SCR=5,743, ratio=220%
     investments_note  = c(306, 307, 308),
     gross_premium     = c(286, 287, 288, 295, 296, 297), # segment P&L + insurance service result
     # Notes on discount curve:
     # - UFR = 3.20% (2025), FSP = 20 years, based on 6-month EURIBOR swap
     # - CoC = 6%; confidence 1-year 95-98%, ultimate 66-76%
-    # - No min-max yield table — describe methodology and extract key parameters
-    disc_liquid_label    = "liquid risk-free",
-    disc_illiquid_label  = "illiquidity premium added"
+    # - Table on p330: rows labeled "0% (min)" = liquid, "100% (max)" = illiquid
+    disc_liquid_label    = "0% (min)",
+    disc_illiquid_label  = "100% (max)"
   ),
 
   nn = list(
